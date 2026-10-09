@@ -1,0 +1,54 @@
+name: Watchdog
+
+# Is your PC still checking? ODEON turns away GitHub's servers, so the checks
+# run on your PC, and this is the safety net: it reads the heartbeat issue the
+# PC rewrites after every check and alerts you if it has gone quiet. It never
+# contacts ODEON. See tools/watchdog.py.
+
+on:
+  schedule:
+    # Hourly, at an odd minute: GitHub's scheduler is busiest on the hour.
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # the keep-alive commit below
+      issues: write # the alert
+      actions: write # switch itself off once you've booked
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Is the PC still checking?
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TZ: Europe/London
+        run: python tools/watchdog.py
+
+      # GitHub switches off schedules in public repositories after 60 days
+      # without a commit, and the release is further away than that. One empty
+      # commit when things have been quiet for 45 days keeps this one running.
+      - name: Keep this schedule alive
+        run: |
+          last=$(git log -1 --format=%ct)
+          age=$(( $(date +%s) - last ))
+          if [ "$age" -lt $(( 45 * 86400 )) ]; then
+            echo "Last commit $(( age / 86400 )) days ago; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Keep the watchdog's schedule alive"
+          git push

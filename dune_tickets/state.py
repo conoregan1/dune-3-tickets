@@ -1,10 +1,8 @@
-"""What the watcher remembers between runs, kept in state.json.
+"""What the watcher remembers between checks, kept in state.json.
 
-The workflow commits this file whenever it changes. That happens rarely (an
-alert, the daily note, ODEON going down or coming back), never on a quiet
-check, so the history stays readable. The daily commit also counts as
-repository activity, which stops GitHub switching the schedule off: it does
-that to public repositories after 60 days without any.
+It lives on the PC that runs the checks and is not committed: it changes every
+five minutes, and nothing else needs it. Delete it to start over (you'll get a
+fresh "watching" note, and anything still on sale is announced again).
 """
 
 from __future__ import annotations
@@ -26,12 +24,18 @@ class State:
     seen: list[str] = field(default_factory=list)
     # London date of the last daily note, so it goes out once a day.
     last_status_day: str | None = None
-    # The release-day "on sale" alert. Closing it is how you say "booked".
-    alert_issue: int | None = None
+    # When the previous check ran, whatever its result. A long gap means the
+    # PC was asleep or off, which isn't ODEON's fault.
+    last_check: str | None = None
+    checks_since_note: int = 0
+    # An on-sale alert has gone out. Closing it is how you say "booked".
+    alert_sent: bool = False
     # Set when ODEON stops answering, cleared when it comes back.
     failing_since: str | None = None
     last_error: str | None = None
-    broken_issue: int | None = None
+    broken_reported: bool = False
+    # The issue the watchdog reads to know this PC is still checking.
+    heartbeat_issue: int | None = None
     # Tickets found and booked, or the day has passed: nothing left to do.
     finished: bool = False
 
@@ -46,7 +50,10 @@ class State:
     def save(self, path: Path = STATE) -> None:
         data = asdict(self)
         data["seen"] = sorted(set(self.seen))
-        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        # Atomic: a laptop going to sleep mid-write mustn't leave half a file.
+        tmp.replace(path)
 
     def remember(self, keys: set[str]) -> None:
         self.seen = sorted(set(self.seen) | keys)

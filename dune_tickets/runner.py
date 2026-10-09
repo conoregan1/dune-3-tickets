@@ -15,6 +15,11 @@ from .odeon import OdeonError
 from .state import State
 from .watch import LONDON, ON_SALE, UNKNOWN, Snapshot, assess, fill_seats, take_snapshot
 
+# A longer gap than this since the previous check means the PC was asleep or
+# off. Failures from before it don't belong to the same outage: a laptop
+# waking up often fails its first check before the Wi-Fi reconnects.
+SLEEP_GAP = timedelta(minutes=30)
+
 
 def run_once(
     cfg: Config,
@@ -37,26 +42,28 @@ def run_once(
 
     # Closing the on-sale alert is how you say "booked". Checked every run so
     # the watcher goes quiet as soon as you do.
-    if state.alert_issue and not notifier.is_open(state.alert_issue):
-        log(f"Alert #{state.alert_issue} has been closed, so you're sorted. Stopping.")
-        _finish(state, notifier, "Tickets sorted. The watcher has switched itself off.")
+    if state.alert_sent and notifier.alert_closed():
+        log("The on-sale alert has been closed, so you're sorted. Stopping.")
+        _finish(cfg, state, notifier, now, "Tickets sorted. The watcher has switched itself off.")
         return
 
     if today > cfg.release_date:
         log("The release day has passed. Stopping.")
-        _finish(state, notifier, "The release day has passed; the watcher has switched itself off.")
+        _finish(cfg, state, notifier, now, "The release day has passed; the watcher has switched itself off.")
         return
 
     first = state.started is None
     if first:
         state.started = now.isoformat(timespec="seconds")
+    gap = now - datetime.fromisoformat(state.last_check) if state.last_check else None
+    state.checks_since_note += 1
 
     snap: Snapshot | None = None
     alerted = False
     try:
         snap = take_snapshot(odeon, cfg, now)
     except OdeonError as exc:
-        _failing(cfg, state, notifier, now, exc, log)
+        _failing(cfg, state, notifier, now, exc, gap, log)
     else:
         _recovered(state, notifier, now, log)
         log(messages.console_summary(snap, cfg))
@@ -64,10 +71,10 @@ def run_once(
         if found.level:
             fill_seats(odeon, snap)
             title, body = messages.alert(found.level, snap, cfg, found.new_dates)
-            number = notifier.raise_issue("tickets", title, body)
+            on_sale = found.level in (ON_SALE, UNKNOWN)
+            notifier.raise_issue("tickets,on-sale" if on_sale else "tickets", title, body)
             alerted = True
-            if found.level in (ON_SALE, UNKNOWN) and number:
-                state.alert_issue = number
+            state.alert_sent = state.alert_sent or on_sale
         elif found.keys:
             log(f"Noted quietly: {', '.join(sorted(found.keys))}")
         # Only after the issue went up: if GitHub refused, the next run tries again.
@@ -87,6 +94,7 @@ def run_once(
         # An alert has just buzzed; a "still watching" note straight after it
         # is noise. The alert is proof enough that it's running today.
         state.last_status_day = today.isoformat()
+        state.checks_since_note = 0
     elif due:
         if snap:
             fill_seats(odeon, snap)
@@ -95,38 +103,57 @@ def run_once(
             cfg,
             snap,
             now,
-            notifier.runs_since(now - timedelta(days=1)),
+            None if first else state.checks_since_note,
             first=first,
             failing_since=failing,
             error=state.last_error,
-            alert_issue=state.alert_issue,
         )
-        notifier.close_open("status", "Superseded by today's note.")
-        notifier.raise_issue("status", title, body)
+        notifier.raise_issue("status", title, body, supersede=True)
         state.last_status_day = today.isoformat()
+        state.checks_since_note = 0
+
+    # Back after a while away: if the watchdog said this PC had gone quiet,
+    # say it's back. Closed by you, so it doesn't buzz.
+    if first or (gap is not None and gap > timedelta(hours=1)):
+        notifier.close_open("pc-offline", messages.back_online(now))
+
+    state.heartbeat_issue = notifier.heartbeat(
+        state.heartbeat_issue, messages.heartbeat(cfg, now, snap, state.last_error)
+    )
+    state.last_check = now.isoformat(timespec="seconds")
 
 
-def _failing(cfg: Config, state: State, notifier: Notifier, now: datetime, exc: Exception, log) -> None:
+def _failing(
+    cfg: Config, state: State, notifier: Notifier, now: datetime, exc: Exception, gap, log
+) -> None:
     log(f"Check failed: {exc}")
-    if not state.failing_since:
+    if not state.failing_since or (gap is not None and gap > SLEEP_GAP):
         state.failing_since = now.isoformat(timespec="seconds")
     state.last_error = str(exc)
 
     since = datetime.fromisoformat(state.failing_since)
-    if state.broken_issue is None and now - since >= timedelta(minutes=cfg.broken_after_minutes):
+    if not state.broken_reported and now - since >= timedelta(minutes=cfg.broken_after_minutes):
         title, body = messages.broken(cfg, since, str(exc))
-        state.broken_issue = notifier.raise_issue("broken", title, body)
+        notifier.raise_issue("broken", title, body)
+        state.broken_reported = True
 
 
 def _recovered(state: State, notifier: Notifier, now: datetime, log) -> None:
     if not state.failing_since:
         return
     log("ODEON is answering again.")
-    notifier.close(state.broken_issue, messages.recovered(now))
-    state.failing_since = state.last_error = state.broken_issue = None
+    if state.broken_reported:
+        notifier.close_open("broken", messages.recovered(now))
+    state.failing_since = state.last_error = None
+    state.broken_reported = False
 
 
-def _finish(state: State, notifier: Notifier, note: str) -> None:
+def _finish(cfg: Config, state: State, notifier: Notifier, now: datetime, note: str) -> None:
     state.finished = True
     notifier.close_open("status", note)
+    notifier.close_open("pc-offline", note)
+    # Tells the watchdog to stand down rather than report a silent PC.
+    state.heartbeat_issue = notifier.heartbeat(
+        state.heartbeat_issue, messages.heartbeat(cfg, now, None, None, finished=True)
+    )
     notifier.disable()

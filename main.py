@@ -3,11 +3,11 @@
 
     python main.py                 # check now and print what it sees (changes nothing)
     python main.py --status-now    # ...and show the daily note it would send
-    python main.py --notify        # the scheduled run: raise GitHub issues, update state.json
+    python main.py --notify        # a real check: notify through GitHub, update state.json
     python main.py --notify --test-alert   # send a test alert, to check your phone buzzes
 
---notify only works inside GitHub Actions, which supplies GITHUB_TOKEN and
-GITHUB_REPOSITORY. Without it, nothing is sent and state.json is left alone.
+Task Scheduler runs `pythonw main.py --notify --log` every 5 minutes (set up
+by tools/schedule.ps1). --notify uses your `gh` login for GitHub.
 """
 
 from __future__ import annotations
@@ -24,17 +24,12 @@ from dune_tickets.odeon import Odeon
 from dune_tickets.runner import run_once
 from dune_tickets.state import State
 
-# Where the ODEON API token is kept between runs. The workflow carries this
-# folder from one run to the next with actions/cache; it is never committed.
-TOKEN_CACHE = ROOT / ".cache" / "odeon-token.json"
-
-# Messages carry emoji and arrows. A Windows console piped to a file falls back
-# to a legacy code page and would crash on them mid-run.
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+CACHE = ROOT / ".cache"
+# ODEON's API token lasts about 12 hours; keeping it means most checks never
+# load the website, only the API.
+TOKEN_CACHE = CACHE / "odeon-token.json"
+LOG = CACHE / "watch.log"
+LOG_LIMIT = 512 * 1024
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -42,39 +37,57 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="dune-tickets",
         description="Watch ODEON Luxe Bristol for Dune: Part Three IMAX tickets.",
     )
-    p.add_argument("--notify", action="store_true", help="Raise GitHub issues and save state (Actions only)")
+    p.add_argument("--notify", action="store_true", help="Notify through GitHub and save state.json")
     p.add_argument("--status-now", action="store_true", help="Send the daily note now, whatever the time")
     p.add_argument("--test-alert", action="store_true", help="Send a test alert and do nothing else")
+    p.add_argument("--log", action="store_true", help=f"Append output to {LOG.relative_to(ROOT)}")
     p.add_argument("-v", "--verbose", action="store_true", help="Show every request made")
     return p.parse_args(argv)
 
 
+def use_log_file() -> None:
+    """Send all output to the log. pythonw has no console, so without this
+    a crash would vanish without a trace."""
+    CACHE.mkdir(exist_ok=True)
+    if LOG.exists() and LOG.stat().st_size > LOG_LIMIT:
+        # Keep the most recent half rather than growing forever.
+        tail = LOG.read_bytes()[-LOG_LIMIT // 2 :]
+        LOG.write_bytes(tail[tail.find(b"\n") + 1 :])
+    stream = open(LOG, "a", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stderr = stream
+    print(f"\n--- {datetime.now().astimezone():%Y-%m-%d %H:%M:%S}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.log:
+        use_log_file()
+    # Messages carry emoji and arrows. A Windows console piped to a file falls
+    # back to a legacy code page and would crash on them mid-run.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     cfg = load_config()
-
-    gh = GitHub.from_env() if args.notify else None
-    if args.notify and gh is None:
-        print(
-            "--notify needs GITHUB_TOKEN and GITHUB_REPOSITORY, which GitHub Actions "
-            "provides. Run without it for a dry run."
-        )
-        return 2
-
-    log_lines: list[str] = []
-
-    def log(message: str) -> None:
-        print(message)
-        log_lines.append(message)
-
-    notifier = Notifier(gh, cfg.github_user, log=log)
+    gh = None
+    if args.notify:
+        try:
+            gh = GitHub.connect(cfg.repo)
+        except GitHubError as exc:
+            print(f"Can't notify: {exc}")
+            return 2
+    # On your PC, alerts go through the Notify workflow so they come from
+    # github-actions[bot]; GitHub won't notify you about your own issues.
+    via_workflow = os.environ.get("GITHUB_ACTIONS") != "true"
+    notifier = Notifier(gh, cfg.github_user, via_workflow=via_workflow)
     now = datetime.now(timezone.utc)
 
     if args.test_alert:
         title, body = messages.test_alert(cfg, now)
         try:
-            notifier.close_open("test", "Superseded by a newer test.")
-            notifier.raise_issue("test", title, body)
+            notifier.raise_issue("test", title, body, supersede=True)
         except GitHubError as exc:
             print(f"GitHub refused the test alert: {exc}")
             return 1
@@ -85,25 +98,26 @@ def main(argv: list[str] | None = None) -> int:
 
     code = 0
     try:
-        run_once(cfg, state, odeon, notifier, now, status_now=args.status_now, log=log)
+        run_once(cfg, state, odeon, notifier, now, status_now=args.status_now)
     except GitHubError as exc:
         # The one failure that must be loud: it means alerts can't go out.
-        # Failing the run makes GitHub tell you by its own route.
-        log(f"GitHub refused a request, so a notification may not have gone out: {exc}")
+        print(f"GitHub refused a request, so a notification may not have gone out: {exc}")
         code = 1
 
     if args.notify:
         # Saved even after a GitHub error: state only records what actually
         # happened, so the next run picks up exactly where this one stopped.
         state.save()
-    log(f"{odeon.requests} request(s) to ODEON.")
-
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write("```\n" + "\n".join(log_lines) + "\n```\n")
+    print(f"{odeon.requests} request(s) to ODEON.")
     return code
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception:
+        # Under pythonw an uncaught exception goes nowhere; put it in the log.
+        import traceback
+
+        traceback.print_exc()
+        raise

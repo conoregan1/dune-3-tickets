@@ -11,6 +11,7 @@ from collections import Counter
 from datetime import date, datetime
 
 from .config import Config
+from .github import FINISHED as FINISHED_MARK
 from .watch import (
     LONDON,
     MEMBERS,
@@ -263,21 +264,21 @@ def status(
     cfg: Config,
     snap: Snapshot | None,
     now: datetime,
-    runs: int | None,
+    checks: int | None,
     *,
     first: bool,
     failing_since: datetime | None,
     error: str | None,
-    alert_issue: int | None,
 ) -> tuple[str, str]:
     today = now.astimezone(LONDON).date()
     rel = cfg.release_date
     who = f"@{cfg.github_user}"
-    checks = f" ({runs} checks in the last 24 hours)" if runs is not None else ""
+    count = f" ({checks} checks since the last note)" if checks is not None else ""
     tail = (
-        f"<sub>Checking every 5 minutes{checks}. A separate alert goes out the moment "
-        "release-day IMAX showings appear. This note comes once a day so that silence "
-        "never means it's broken.</sub>"
+        f"<sub>Your PC checks every 5 minutes while it's awake{count}, and GitHub tells "
+        "you if it stops. A separate alert goes out the moment release-day IMAX "
+        "showings appear. This note comes once a day so that silence never means "
+        "it's broken.</sub>"
     )
 
     if snap is None:
@@ -299,10 +300,9 @@ def status(
 
     if on_sale:
         title = f"🎟️ Reminder: Dune IMAX for {day(rel)} is on sale at ODEON Bristol"
-        ref = f" (#{alert_issue})" if alert_issue else ""
         lead = (
             f"{who} **Release-day IMAX tickets are on sale.** If you've booked, close the "
-            f"alert issue{ref} and the watcher will stop."
+            "🎟️ alert issue and the watcher will stop."
         )
         middle = [f"**{cfg.cinema_name} · {long_day(rel)} · IMAX**", "", booking_table(imax)]
     elif listed:
@@ -351,12 +351,69 @@ def broken(cfg: Config, since: datetime, error: str) -> tuple[str, str]:
             "",
             f"Error: `{error}`",
             "",
-            "It closes itself as soon as ODEON answers again. If it's still open in a "
-            "day, ODEON has probably changed its website or started turning away "
-            "GitHub's servers; the Actions log for the latest run says which.",
+            "It closes itself as soon as ODEON answers again. If your internet is "
+            "fine and it's still open in a day, ODEON has probably changed its "
+            "website; `.cache/watch.log` on your PC has the details.",
         ]
     )
     return title, body
+
+
+# ------------------------------------------------- heartbeat and watchdog
+
+
+def heartbeat(
+    cfg: Config, now: datetime, snap: Snapshot | None, error: str | None, *, finished: bool = False
+) -> str:
+    """The body of the heartbeat issue, rewritten after every check."""
+    if finished:
+        line = "Finished: nothing left to watch for. The watchdog stands down."
+    elif snap is None:
+        line = f"ODEON didn't answer (`{error}`)."
+    elif any(s.sale in (ON_SALE, UNKNOWN) for s in snap.release_imax):
+        line = f"release-day IMAX is **on sale** ({len(snap.release_imax)} showings)."
+    elif snap.release_imax:
+        line = f"release-day IMAX is listed ({len(snap.release_imax)} showings), not on sale yet."
+    else:
+        line = f"no Dune IMAX showings for {day(cfg.release_date)} yet."
+    return "\n".join(
+        [
+            f"<!-- last-check: {now.isoformat(timespec='seconds')} -->",
+            FINISHED_MARK if finished else "",
+            f"Last check from your PC: **{when(now)}**: {line}",
+            "",
+            "The watcher on your PC rewrites this after every check, and GitHub's "
+            f"hourly watchdog reads it. If it goes {cfg.stale_after_hours:g} hours without "
+            "an update you'll get an alert. Editing it never notifies you. Leave it open.",
+        ]
+    )
+
+
+def offline(cfg: Config, last: datetime | None, now: datetime) -> tuple[str, str]:
+    since = f"since {when(last)}" if last else "at all yet"
+    title = "💤 Your PC has stopped checking for Dune tickets"
+    body = "\n".join(
+        [
+            f"@{cfg.github_user} **Your PC hasn't checked ODEON {since}.** ODEON blocks "
+            "GitHub's servers, so your PC is the only thing watching, and while it's "
+            "asleep, off or offline, nothing is.",
+            "",
+            "Wake it, plug it in, or open the lid. This closes itself on the next check.",
+            "",
+            "If the PC is on and this stays open, the scheduled task may have stopped. "
+            "In PowerShell, in the project folder: "
+            r"`powershell -ExecutionPolicy Bypass -File tools\schedule.ps1`",
+            "",
+            f"[Dune on ODEON]({cfg.film_page})",
+            "",
+            f"<sub>GitHub watchdog, {when(now)}.</sub>",
+        ]
+    )
+    return title, body
+
+
+def back_online(now: datetime) -> str:
+    return f"Back: your PC checked again {when(now)}."
 
 
 def recovered(now: datetime) -> str:

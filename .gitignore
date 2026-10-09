@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
-# ODEON's short-lived API token, carried between runs by actions/cache.
+# ODEON token, check log: local to the PC that runs the checks.
 .cache/
+# What the watcher has announced; lives on that PC, changes every 5 minutes.
+state.json
+state.tmp

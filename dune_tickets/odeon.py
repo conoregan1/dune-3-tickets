@@ -6,6 +6,9 @@ the Vista "OCAPI" at vwc.odeon.co.uk to draw showtimes and seat maps. This does
 the same thing: read a page, lift the token, ask the API. No login, and nothing
 the public site doesn't already hand to every visitor.
 
+ODEON's Cloudflare turns away GitHub's servers (and other datacentres) with a
+flat 403, website and API alike, which is why this runs on a home PC.
+
 Endpoints used (all GET, all under ``{apiUrl}/ocapi/v1/``):
 
     films                                   every film ODEON knows about

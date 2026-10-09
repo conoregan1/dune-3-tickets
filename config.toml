@@ -1,5 +1,6 @@
-# What the watcher looks for. Edit on github.com (pencil icon) and commit; the
-# next run picks it up.
+# What the watcher looks for. The checks run on your PC from this folder, so
+# edit it here; the next check (within 5 minutes) uses it. Commit and push too,
+# so GitHub's watchdog sees the same [watchdog] settings.
 
 [cinema]
 # ODEON's own id for ODEON Luxe Bristol at Cabot Circus, the one with the IMAX
@@ -23,8 +24,9 @@ name = "IMAX"
 attribute_id = "0000000147"
 
 [notify]
-# Assigned and @-mentioned on every issue, which is what makes the GitHub app
-# push it to your phone.
+# Where the notifications go. Every issue is assigned to github_user and
+# @-mentions them, which is what makes the GitHub app push it to your phone.
+repo = "conoregan1/dune-3-tickets"
 github_user = "conoregan1"
 # The daily "still watching" note goes out with the first check at or after
 # this hour, UK time.
@@ -32,3 +34,12 @@ status_hour = 9
 # How long ODEON can be unreachable before you're told the watcher is broken.
 # Short blips are normal and not worth a notification.
 broken_after_minutes = 60
+
+[watchdog]
+# GitHub checks hourly that your PC is still checking ODEON. If the last check
+# is older than this, you get an alert (closed again when the PC is back).
+stale_after_hours = 3
+# No "PC isn't checking" alerts between these hours, UK time. A laptop asleep
+# overnight is normal; if it's still not checking by morning you'll hear then.
+quiet_from = 23
+quiet_until = 8

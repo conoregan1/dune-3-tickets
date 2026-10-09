@@ -1,0 +1,75 @@
+name: Notify
+
+# Raises an issue on behalf of the watcher on your PC.
+#
+# GitHub never notifies you about your own actions, and the PC acts as you
+# (through your gh login), so an issue it opened itself would arrive in
+# silence. Opened here, it comes from github-actions[bot], is assigned to you,
+# and the GitHub app pushes it to your phone.
+#
+# Inputs reach the shell only through env, never pasted into it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      labels:
+        description: "Comma-separated labels; the first is the kind"
+        type: string
+        required: true
+      title:
+        description: "Issue title"
+        type: string
+        required: true
+      body:
+        description: "Issue body (Markdown)"
+        type: string
+        required: true
+      supersede:
+        description: "Close open issues of the same kind first"
+        type: boolean
+        default: false
+
+# In order, one at a time: a note that supersedes another must not race it.
+concurrency:
+  group: notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+
+    steps:
+      - name: Raise the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          LABELS: ${{ inputs.labels }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+          SUPERSEDE: ${{ inputs.supersede }}
+          ASSIGNEE: ${{ github.repository_owner }}
+        run: |
+          IFS=',' read -ra names <<< "$LABELS"
+          for name in "${names[@]}"; do
+            case "$name" in
+              tickets)        color=d93f0b ;;
+              on-sale|broken) color=b60205 ;;
+              status)         color=0e8a16 ;;
+              pc-offline)     color=fbca04 ;;
+              test)           color=c5def5 ;;
+              *)              color=ededed ;;
+            esac
+            gh label create "$name" --color "$color" --force > /dev/null
+          done
+
+          if [ "$SUPERSEDE" = "true" ]; then
+            for n in $(gh issue list --label "${names[0]}" --state open --json number --jq '.[].number'); do
+              gh issue close "$n" --comment "Superseded by a newer one."
+            done
+          fi
+
+          printf '%s' "$BODY" > body.md
+          gh issue create --title "$TITLE" --body-file body.md --label "$LABELS" --assignee "$ASSIGNEE"

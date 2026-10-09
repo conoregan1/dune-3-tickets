@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import importlib.util
 import json
 import sys
 import tempfile
@@ -23,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dune_tickets import messages  # noqa: E402
 from dune_tickets.config import load_config  # noqa: E402
-from dune_tickets.github import Notifier  # noqa: E402
+from dune_tickets.github import FINISHED, Notifier  # noqa: E402
 from dune_tickets.odeon import Odeon, OdeonError, jwt_expiry, token_from_page  # noqa: E402
 from dune_tickets.runner import run_once  # noqa: E402
 from dune_tickets.state import State  # noqa: E402
@@ -91,39 +92,58 @@ class FakeOdeon:
 
 
 class FakeNotifier(Notifier):
-    """Records instead of calling GitHub, and keeps track of open issues."""
+    """Stands in for GitHub: records what was raised and tracks open issues."""
 
     def __init__(self):
         super().__init__(None, CFG.github_user, log=lambda message: None)
-        self.number = 100
-        self.open: dict[int, str] = {}
+        self.issues: dict[int, dict] = {}
         self.disabled = False
+        self.beat = ""
 
-    def raise_issue(self, label, title, body):
-        self.raised.append((label, title, body))
-        self.number += 1
-        self.open[self.number] = label
-        return self.number
+    def raise_issue(self, labels, title, body, *, supersede=False):
+        kind = labels.split(",")[0]
+        if supersede:
+            self.close_open(kind, "superseded")
+        self.raised.append((kind, title, body))
+        self.issues[100 + len(self.issues)] = {"labels": labels.split(","), "open": True}
 
     def close_open(self, label, comment):
-        for number, lbl in list(self.open.items()):
-            if lbl == label:
-                self.close(number, comment)
+        mine = [i for i in self.issues.values() if label in i["labels"] and i["open"]]
+        for issue in mine:
+            issue["open"] = False
+        return len(mine)
 
-    def close(self, number, comment):
-        self.open.pop(number, None)
+    def alert_closed(self):
+        alerts = [i for i in self.issues.values() if "on-sale" in i["labels"]]
+        return bool(alerts) and not any(i["open"] for i in alerts)
 
-    def is_open(self, number):
-        return number in self.open
-
-    def runs_since(self, since):
-        return 250
+    def heartbeat(self, number, body):
+        self.beat = body
+        return 1
 
     def disable(self):
         self.disabled = True
 
     def labels(self) -> list[str]:
-        return [label for label, _, _ in self.raised]
+        return [kind for kind, _, _ in self.raised]
+
+    def open_kinds(self) -> list[str]:
+        return [i["labels"][0] for i in self.issues.values() if i["open"]]
+
+
+class FakeGitHub:
+    """Just enough of GitHub for the watchdog: the heartbeat and open alerts."""
+
+    def __init__(self, heartbeat_body: str | None, offline_open: bool = False):
+        self.heartbeat_body = heartbeat_body
+        self.offline_open = offline_open
+
+    def issues(self, label, state="open"):
+        if label == "heartbeat":
+            return [] if self.heartbeat_body is None else [{"body": self.heartbeat_body}]
+        if label == "pc-offline":
+            return [{"number": 9}] if self.offline_open else []
+        return []
 
 
 def booking_rule(*periods: tuple[str, str]) -> dict:
@@ -169,6 +189,13 @@ def release_day(*, rule: dict | None = None, imax: bool = True, restrictions=Non
 
 def run(state: State, odeon, gh: Notifier, now: datetime) -> None:
     run_once(CFG, state, odeon, gh, now, log=lambda message: None)
+
+
+def load_watchdog():
+    spec = importlib.util.spec_from_file_location("dune_watchdog", Path(__file__).with_name("watchdog.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def fake_jwt(exp: int) -> str:
@@ -286,43 +313,57 @@ def main() -> int:
     run(state, FakeOdeon(), gh, utc(2026, 10, 10, 0, 5))
     check("first run sends the 'watching' note", gh.labels() == ["status"] and "👋" in gh.raised[0][1])
     check("first run remembers the preview quietly", "date:2026-12-15" in state.seen)
+    check("the heartbeat carries the check time", "<!-- last-check: 2026-10-10T00:05:00+00:00 -->" in gh.beat)
     run(state, FakeOdeon(), gh, utc(2026, 10, 10, 8, 30))
     check("no second note the same day", len(gh.raised) == 1)
     run(state, FakeOdeon(), gh, utc(2026, 10, 11, 7, 0))
     check("nothing before 9am the next day", len(gh.raised) == 1)
     run(state, FakeOdeon(), gh, utc(2026, 10, 11, 8, 5))
     check("daily note after 9am", gh.labels() == ["status", "status"])
-    check("yesterday's note is closed", list(gh.open.values()) == ["status"])
+    check("yesterday's note is closed", gh.open_kinds() == ["status"])
     check("the note says still watching", "still watching" in gh.raised[-1][1])
-    check("the note counts recent checks", "250 checks" in gh.raised[-1][2])
+    check("the note counts the checks", "3 checks since the last note" in gh.raised[-1][2])
     run(state, FakeOdeon(release_day()), gh, utc(2026, 11, 3, 9, 2))
     check("tickets on sale raise an alert", gh.labels()[-1] == "tickets", f"got {gh.labels()}")
-    check("the alert is remembered as the one to close", state.alert_issue == gh.number)
+    check("...labelled as the one to close", "on-sale" in list(gh.issues.values())[-1]["labels"])
     check("no 'still watching' note straight after it", gh.labels().count("status") == 2)
     run(state, FakeOdeon(release_day()), gh, utc(2026, 11, 3, 9, 7))
     check("no repeat alert five minutes later", gh.labels().count("tickets") == 1)
     run(state, FakeOdeon(release_day()), gh, utc(2026, 11, 4, 9, 2))
     check("the daily note becomes a reminder", "Reminder" in gh.raised[-1][1])
-    gh.close(state.alert_issue, "booked")
+    gh.close_open("on-sale", "booked")
     run(state, FakeOdeon(release_day()), gh, utc(2026, 11, 4, 9, 7))
     check("closing the alert stops the watcher", state.finished and gh.disabled)
+    check("and tells the watchdog to stand down", FINISHED in gh.beat)
 
     print("ODEON going down")
     state, gh = State(started="x", seen=["date:2026-12-15"], last_status_day="2026-10-10"), FakeNotifier()
     t0 = utc(2026, 10, 10, 10, 0)
-    run(state, FakeOdeon(fail="boom"), gh, t0)
-    check("a failure is remembered", state.failing_since is not None and state.last_error == "boom")
-    check("but a blip isn't reported", gh.raised == [])
+    for minutes in range(0, 60, 5):
+        run(state, FakeOdeon(fail="boom"), gh, t0 + timedelta(minutes=minutes))
+    check("a failure is remembered", state.failing_since == t0.isoformat() and state.last_error == "boom")
+    check("but under an hour isn't reported", gh.raised == [])
     run(state, FakeOdeon(fail="boom"), gh, t0 + timedelta(minutes=61))
     check("an hour of failures is reported", gh.labels() == ["broken"])
     run(state, FakeOdeon(fail="boom"), gh, t0 + timedelta(minutes=66))
     check("once", gh.labels() == ["broken"])
     run(state, FakeOdeon(), gh, t0 + timedelta(minutes=71))
-    check("recovery closes it", state.failing_since is None and not gh.open)
+    check("recovery closes it", state.failing_since is None and not gh.open_kinds())
     state = State(started="x", seen=["date:2026-12-15"], failing_since=t0.isoformat(), last_error="boom")
     gh = FakeNotifier()
     run(state, FakeOdeon(fail="boom"), gh, utc(2026, 10, 11, 8, 5))
     check("the daily note still goes out while it's down", "⚠️" in gh.raised[-1][1])
+
+    print("a laptop that sleeps")
+    state, gh = State(started="x", seen=["date:2026-12-15"], last_status_day="2026-10-10"), FakeNotifier()
+    run(state, FakeOdeon(fail="no wifi"), gh, utc(2026, 10, 10, 22, 0))
+    run(state, FakeOdeon(fail="no wifi yet"), gh, utc(2026, 10, 11, 6, 0))
+    check("a failure before sleeping doesn't count after waking", gh.raised == [])
+    check("the outage starts again from waking", state.failing_since == "2026-10-11T06:00:00+00:00")
+    gh.issues[1] = {"labels": ["pc-offline"], "open": True}
+    run(state, FakeOdeon(), gh, utc(2026, 10, 11, 6, 5))
+    run(state, FakeOdeon(), gh, utc(2026, 10, 11, 7, 30))
+    check("back after a gap closes the watchdog's alert", "pc-offline" not in gh.open_kinds())
 
     print("the queue")
     state, gh = State(started="x", seen=["date:2026-12-15"], last_status_day="2026-10-10"), FakeNotifier()
@@ -335,11 +376,35 @@ def main() -> int:
     run(state, FakeOdeon(), gh, utc(2026, 12, 19, 12, 0))
     check("the watcher switches itself off", state.finished and gh.disabled and gh.raised == [])
 
+    print("the GitHub watchdog")
+    watchdog = load_watchdog()
+    noon = utc(2026, 10, 10, 11, 0)
+
+    def beat(at):
+        return f"<!-- last-check: {at.isoformat(timespec='seconds')} -->\nLast check..."
+
+    def dog(body, now=noon, offline_open=False):
+        gh = FakeNotifier()
+        did = watchdog.watch(CFG, FakeGitHub(body, offline_open), gh, now, log=lambda m: None)
+        return did, gh
+
+    check("a recent check is fine", dog(beat(noon - timedelta(hours=1)))[0] == "fresh")
+    did, gh = dog(beat(noon - timedelta(hours=4)))
+    check("four hours quiet is an alert", did == "alerted" and gh.labels() == ["pc-offline"], did)
+    check("...that says when it last checked", "Sat 10 Oct at 08:00" in gh.raised[0][2])
+    check("not at 2am", dog(beat(utc(2026, 10, 9, 20, 0)), utc(2026, 10, 10, 1, 0))[0] == "quiet")
+    check("not twice", dog(beat(noon - timedelta(hours=4)), offline_open=True)[0] == "reported")
+    check("a PC that never started is an alert", dog(None)[0] == "alerted")
+    did, gh = dog(beat(noon) + "\n" + FINISHED)
+    check("stands down when the PC has finished", did == "finished" and gh.disabled)
+    check("stands down after the day", dog(beat(noon), utc(2026, 12, 19, 12, 0))[0] == "past")
+    check("23:00 to 08:00 is quiet", [watchdog.quiet(h, CFG) for h in (22, 23, 3, 7, 8)] == [False, True, True, True, False])
+
     print("state.json")
     path = Path(tempfile.mkdtemp()) / "state.json"
-    State(started="2026-10-10T00:05:00+00:00", seen=["b", "a", "a"], alert_issue=7).save(path)
+    State(started="2026-10-10T00:05:00+00:00", seen=["b", "a", "a"], alert_sent=True).save(path)
     back = State.load(path)
-    check("round trip", back.seen == ["a", "b"] and back.alert_issue == 7)
+    check("round trip", back.seen == ["a", "b"] and back.alert_sent is True)
 
     print("config.toml")
     check("release date", CFG.release_date == RELEASE, f"got {CFG.release_date}")
