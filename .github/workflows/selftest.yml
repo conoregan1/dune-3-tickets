@@ -1,0 +1,33 @@
+name: Self-test
+
+# On every push of code, so a broken change shows up as a red cross here
+# rather than as a missed ticket alert. state.json commits from the watcher
+# are made with the run's own token, which never triggers workflows.
+on:
+  push:
+    paths-ignore:
+      - "state.json"
+      - "README.md"
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Offline checks
+        run: python tools/selftest.py
+
+      - name: Workflow files say what they mean
+        run: |
+          python -m pip install --quiet pyyaml
+          python tools/check_workflows.py

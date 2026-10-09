@@ -1,0 +1,166 @@
+{
+ "businessDate": "2026-12-15",
+ "showtimes": [
+  {
+   "id": "315-11220",
+   "schedule": {
+    "businessDate": "2026-12-15",
+    "startsAt": "2026-12-15T19:00:00+00:00",
+    "endsAt": "2026-12-15T21:55:00+00:00",
+    "filmStartsAt": "2026-12-15T19:25:00+00:00",
+    "filmEndsAt": "2026-12-15T21:55:00+00:00",
+    "inSeatItemDelivery": null
+   },
+   "isSoldOut": false,
+   "seatLayoutId": "315-6-90",
+   "filmId": "HO00009199",
+   "siteId": "315",
+   "screenId": "315-6",
+   "areaCategories": [
+    {
+     "areaCategoryId": "315-0000000003",
+     "isAllocatedSeating": true
+    },
+    {
+     "areaCategoryId": "315-0000000013",
+     "isAllocatedSeating": true
+    },
+    {
+     "areaCategoryId": "315-0000000018",
+     "isAllocatedSeating": true
+    },
+    {
+     "areaCategoryId": "315-0000000021",
+     "isAllocatedSeating": true
+    }
+   ],
+   "attributeIds": [
+    "0000000006",
+    "0000000147",
+    "0000000174",
+    "0000000030"
+   ],
+   "isAllocatedSeating": true,
+   "requires3dGlasses": false,
+   "eventId": null,
+   "restrictions": [],
+   "filmAdvanceBookingRuleId": null
+  },
+  {
+   "id": "315-11303",
+   "schedule": {
+    "businessDate": "2026-12-15",
+    "startsAt": "2026-12-15T22:45:00+00:00",
+    "endsAt": "2026-12-16T01:40:00+00:00",
+    "filmStartsAt": "2026-12-15T23:10:00+00:00",
+    "filmEndsAt": "2026-12-16T01:40:00+00:00",
+    "inSeatItemDelivery": null
+   },
+   "isSoldOut": false,
+   "seatLayoutId": "315-6-90",
+   "filmId": "HO00009199",
+   "siteId": "315",
+   "screenId": "315-6",
+   "areaCategories": [
+    {
+     "areaCategoryId": "315-0000000003",
+     "isAllocatedSeating": true
+    },
+    {
+     "areaCategoryId": "315-0000000013",
+     "isAllocatedSeating": true
+    },
+    {
+     "areaCategoryId": "315-0000000018",
+     "isAllocatedSeating": true
+    },
+    {
+     "areaCategoryId": "315-0000000021",
+     "isAllocatedSeating": true
+    }
+   ],
+   "attributeIds": [
+    "0000000006",
+    "0000000147",
+    "0000000174",
+    "0000000030"
+   ],
+   "isAllocatedSeating": true,
+   "requires3dGlasses": false,
+   "eventId": null,
+   "restrictions": [],
+   "filmAdvanceBookingRuleId": null
+  }
+ ],
+ "relatedData": {
+  "attributes": [
+   {
+    "id": "0000000006",
+    "name": {
+     "text": "Audio Described",
+     "translations": []
+    },
+    "shortName": {
+     "text": "AudioDes",
+     "translations": []
+    }
+   },
+   {
+    "id": "0000000147",
+    "name": {
+     "text": "IMAX",
+     "translations": []
+    },
+    "shortName": {
+     "text": "IMAX",
+     "translations": []
+    }
+   },
+   {
+    "id": "0000000174",
+    "name": {
+     "text": "Laser",
+     "translations": []
+    },
+    "shortName": {
+     "text": "Laser",
+     "translations": []
+    }
+   },
+   {
+    "id": "0000000030",
+    "name": {
+     "text": "Wheelchair Accessible",
+     "translations": []
+    },
+    "shortName": {
+     "text": "Wheelchair",
+     "translations": []
+    }
+   }
+  ],
+  "films": [
+   {
+    "id": "HO00009199",
+    "title": {
+     "text": "Dune: Part Three",
+     "translations": []
+    },
+    "releaseDate": "2026-12-18",
+    "runtimeInMinutes": 150,
+    "hopk": "HO00009199",
+    "distributorName": "WARNER BROS DISTRIBUTORS LTD"
+   }
+  ],
+  "screens": [
+   {
+    "id": "315-6",
+    "name": {
+     "text": "Screen 6",
+     "translations": []
+    }
+   }
+  ],
+  "filmAdvanceBookingRules": []
+ }
+}

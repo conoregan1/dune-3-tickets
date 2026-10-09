@@ -1,0 +1,10 @@
+{
+  "started": null,
+  "seen": [],
+  "last_status_day": null,
+  "alert_issue": null,
+  "failing_since": null,
+  "last_error": null,
+  "broken_issue": null,
+  "finished": false
+}

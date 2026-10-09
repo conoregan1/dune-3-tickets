@@ -1,0 +1,34 @@
+# What the watcher looks for. Edit on github.com (pencil icon) and commit; the
+# next run picks it up.
+
+[cinema]
+# ODEON's own id for ODEON Luxe Bristol at Cabot Circus, the one with the IMAX
+# screen (Screen 6). The old Union Street ODEON is a different site.
+site_id = "315"
+name = "ODEON Luxe Bristol (Cabot Circus)"
+page = "https://www.odeon.co.uk/cinemas/bristol/"
+
+[film]
+# Matched against ODEON's film titles, ignoring case and punctuation ("Part 3"
+# counts as "Part Three"). ODEON lists one film several times (today a UK and
+# an Irish distributor entry, sometimes one per format), so every match counts.
+titles = ["Dune: Part Three"]
+release_date = 2026-12-18
+page = "https://www.odeon.co.uk/films/dune-part-three/HO00009199/"
+
+[format]
+# A showing counts as IMAX when one of its attributes has this in its name.
+name = "IMAX"
+# ODEON's id for that attribute, for the summary data that only carries ids.
+attribute_id = "0000000147"
+
+[notify]
+# Assigned and @-mentioned on every issue, which is what makes the GitHub app
+# push it to your phone.
+github_user = "conoregan1"
+# The daily "still watching" note goes out with the first check at or after
+# this hour, UK time.
+status_hour = 9
+# How long ODEON can be unreachable before you're told the watcher is broken.
+# Short blips are normal and not worth a notification.
+broken_after_minutes = 60

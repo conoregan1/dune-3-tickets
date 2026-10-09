@@ -1,0 +1,48 @@
+{
+ "films": [
+  {
+   "id": "HO00008961",
+   "title": {
+    "text": "Verity",
+    "translations": []
+   },
+   "releaseDate": "2026-10-02",
+   "runtimeInMinutes": 117,
+   "hopk": "HO00008961",
+   "distributorName": "SONY PICTURES"
+  },
+  {
+   "id": "HO00009221",
+   "title": {
+    "text": "Avengers: Doomsday",
+    "translations": []
+   },
+   "releaseDate": "2026-12-16",
+   "runtimeInMinutes": 165,
+   "hopk": "HO00009221",
+   "distributorName": "WALT DISNEY STUDIOS INTERNTL"
+  },
+  {
+   "id": "HO00009199",
+   "title": {
+    "text": "Dune: Part Three",
+    "translations": []
+   },
+   "releaseDate": "2026-12-18",
+   "runtimeInMinutes": 150,
+   "hopk": "HO00009199",
+   "distributorName": "WARNER BROS DISTRIBUTORS LTD"
+  },
+  {
+   "id": "HO00009200",
+   "title": {
+    "text": "Dune: Part Three",
+    "translations": []
+   },
+   "releaseDate": "2026-12-18",
+   "runtimeInMinutes": 150,
+   "hopk": "HO00009200",
+   "distributorName": "WARNER BROS DISTRIBUTORS LTD IR"
+  }
+ ]
+}

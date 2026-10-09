@@ -1,0 +1,106 @@
+name: Check for Dune tickets
+
+on:
+  schedule:
+    # Every 5 minutes, the shortest GitHub allows, on minutes ending 2 and 7.
+    # GitHub's scheduler is busiest at the top of the hour and on the quarter
+    # hours, and delays or drops runs then, so these minutes avoid the worst
+    # of it. Expect real gaps of 5-15 minutes rather than exactly 5.
+    - cron: "2-59/5 * * * *"
+  # Run it by hand from the Actions tab: a normal check, today's note now, or
+  # a test alert to confirm your phone buzzes.
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        default: "check"
+        options:
+          - "check"
+          - "send status note now"
+          - "send a test alert"
+
+# One at a time. Runs commit state.json, and two at once would race to push.
+# A check takes well under a minute, so queuing costs nothing.
+concurrency:
+  group: dune-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # commit state.json
+      issues: write # the notifications themselves
+      actions: write # count recent runs for the daily note; switch off when done
+
+    steps:
+      # Current main, not the commit this run was queued at: the previous run
+      # may have just committed state.json.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # ODEON's API token lasts about 12 hours. Carrying it between runs means
+      # most checks never touch the website at all, only the API, and a check
+      # can still run while the website is holding people in a queue.
+      - name: Restore ODEON token
+        uses: actions/cache/restore@v6
+        with:
+          path: .cache
+          key: odeon-token-${{ github.run_id }}
+          restore-keys: odeon-token-
+
+      # Standard library only, so there is nothing to install.
+      - name: Check ODEON
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TZ: Europe/London
+          ACTION: ${{ inputs.action || 'check' }}
+        run: |
+          case "$ACTION" in
+            "send a test alert")    python main.py --notify --test-alert ;;
+            "send status note now") python main.py --notify --status-now ;;
+            *)                      python main.py --notify ;;
+          esac
+
+      # Keyed on the token itself, so a new cache entry is only made when the
+      # token changes (twice a day), not every five minutes.
+      - name: Keep ODEON token for the next run
+        if: always() && hashFiles('.cache/odeon-token.json') != ''
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .cache
+          key: odeon-token-${{ hashFiles('.cache/odeon-token.json') }}
+
+      - name: Save state
+        if: always()
+        run: |
+          if git diff --quiet -- state.json; then
+            echo "Nothing new to remember."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update watcher state" -- state.json
+
+          # Edits made on github.com (config.toml, say) can land between this
+          # run's checkout and its push. Rebase onto them rather than lose
+          # what this run learned.
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected; rebasing onto whatever landed first."
+            git pull --rebase --autostash origin main
+            sleep 2
+          done
+          echo "::error::Could not save state.json after three attempts."
+          exit 1
